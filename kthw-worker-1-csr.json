@@ -1,0 +1,16 @@
+{
+  "CN": "system:node:kthw-worker-1",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "DZ",
+      "L": "Batna",
+      "O": "system:nodes",
+      "OU": "ICOSNET",
+      "ST": "Batna"
+    }
+  ]
+}

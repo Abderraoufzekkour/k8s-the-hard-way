@@ -1,0 +1,16 @@
+{
+  "CN": "system:kube-controller-manager",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "DZ",
+      "L": "Batna",
+      "O": "system:kube-controller-manager",
+      "OU": "ICOSNET",
+      "ST": "Batna"
+    }
+  ]
+}
