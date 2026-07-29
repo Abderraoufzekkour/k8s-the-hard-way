@@ -1,6 +1,6 @@
 # ☸️ Kubernetes The Hard Way — OpenStack Bare-Metal
 
-> Manual, installer-free Kubernetes cluster deployment on real OpenStack infrastructure — built to understand every layer of the stack.
+> Manual, installer-free Kubernetes cluster deployment on real OpenStack infrastructure — built from scratch to master every layer of the distributed stack.
 
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.28.0-326CE5?style=flat-square&logo=kubernetes&logoColor=white)
 ![OpenStack](https://img.shields.io/badge/OpenStack-Bare--Metal-ED1944?style=flat-square&logo=openstack&logoColor=white)
@@ -12,23 +12,22 @@
 
 ## 🎯 Project Overview
 
-This project follows Kelsey Hightower's **"Kubernetes The Hard Way"** methodology, adapted for a real **OpenStack bare-metal** environment with a **single control plane architecture**. Every component is manually provisioned — no kubeadm, no automation, no shortcuts.
+This project follows Kelsey Hightower's **"Kubernetes The Hard Way"** methodology, adapted for a real **OpenStack bare-metal** environment with a **single control plane architecture** (`kthw-controller-1`). Every binary, certificate, systemd service, and routing table is manually configured — **no `kubeadm`, no helper scripts, no shortcuts**.
 
-The goal is full exposure to the internals of a Kubernetes cluster:
-
-| What | Why it matters |
+| Component / Layer | Deep-Dive Objective |
 |---|---|
-| TLS bootstrapping & mTLS | Understand how components authenticate each other |
-| Manual `etcd` setup | See the consensus layer that backs the entire control plane |
-| `containerd` + `runc` config | Know what actually runs your containers |
-| Flannel VXLAN overlay | Understand pod-to-pod networking across nodes |
-| CoreDNS deployment | See how service discovery works from the ground up |
+| **TLS Bootstrap & PKI** | Hand-generate a private CA (`cfssl`), construct custom CSR configs, and enforce mTLS across all control plane and worker components |
+| **Distributed Consensus (`etcd`)** | Manually configure, bootstrap, and secure an `etcd` instance for cluster state persistence |
+| **Control Plane Binaries** | Provision systemd-managed `kube-apiserver`, `kube-controller-manager`, and `kube-scheduler` with secure authorization flags |
+| **Container Runtime (`containerd`)** | Install and tune `containerd` + `runc` with `SystemdCgroup` driver to prevent sandbox execution failures |
+| **Overlay Networking (CNI)** | Establish Flannel VXLAN routing across bare-metal nodes, managing subnet leases and CNI config lifecycle |
+| **Cluster Add-ons** | Bootstrap CoreDNS for internal service discovery and deploy Metrics Server for resource telemetry |
 
-> This is not a tutorial clone — it's a **real deployment on OpenStack infrastructure** with documented failures, root-cause analysis, and production-relevant fixes.
+> This is not a tutorial clone — it documents a **live deployment on real OpenStack infrastructure** with granular root-cause analysis for networking failures, clock synchronization anomalies, and sandbox runtime blocks.
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ Architecture & Topology
 
 ```
                     ┌──────────────────┐
@@ -48,25 +47,26 @@ The goal is full exposure to the internals of a Kubernetes cluster:
                              │
                ┌─────────────┴─────────────┐
                │                           │
-      ┌────────▼────────┐       ┌──────────▼──────┐
-      │  kthw-worker-1  │       │  kthw-worker-2  │
-      │                 │       │                 │
-      │  • kubelet      │       │  • kubelet      │
-      │  • kube-proxy   │       │  • kube-proxy   │
-      │  • containerd   │       │  • containerd   │
-      └─────────────────┘       └─────────────────┘
+      ┌────────▼────────┐       ┌──────────▼──────────┐
+      │  kthw-worker-1  │       │   kthw-worker-2     │
+      │                 │       │                     │
+      │  • kubelet      │       │  • kubelet          │
+      │  • kube-proxy   │       │  • kube-proxy       │
+      │  • containerd   │       │  • containerd       │
+      └─────────────────┘       └─────────────────────┘
 ```
 
 ### Component Stack
 
-| Layer | Component |
-|---|---|
-| Cloud Infrastructure | OpenStack Bare-Metal — Ubuntu 22.04 LTS |
-| Container Runtime | `containerd` 1.7.x + `runc` |
-| Networking (CNI) | Flannel (VXLAN backend) |
-| DNS | CoreDNS |
-| Control Plane | `etcd`, `kube-apiserver`, `kube-controller-manager`, `kube-scheduler` |
-| Worker Nodes | `kubelet`, `kube-proxy` |
+| Layer | Technology | Role |
+|---|---|---|
+| Cloud Infrastructure | OpenStack Bare-Metal — Ubuntu 22.04 LTS | Physical compute and L2/L3 network boundary |
+| Bastion Host | `p1-bastion` | TLS generation, `kubectl` orchestration via `admin.kubeconfig` |
+| Control Plane | `kthw-controller-1` | Hosts all orchestration loops and state persistence |
+| Worker Nodes | `kthw-worker-1`, `kthw-worker-2` | Execute container workloads and network routing |
+| Container Runtime | `containerd` 1.7.x + `runc` | OCI-compliant runtime managing container lifecycles |
+| Networking CNI | Flannel (VXLAN backend) | Overlay network for cross-node pod-to-pod traffic |
+| DNS | CoreDNS v1.10+ | Internal service discovery mapping DNS records to ClusterIPs |
 
 ---
 
@@ -74,24 +74,24 @@ The goal is full exposure to the internals of a Kubernetes cluster:
 
 ```text
 kthw/
-├── 📁 configs/                        # Systemd unit files & component configs
-│   ├── containerd.toml                # containerd runtime config (systemd cgroup driver)
-│   ├── kube-apiserver.service         # API server systemd unit
-│   ├── kube-controller-manager.service
-│   ├── kube-proxy-config.yaml
-│   ├── kube-scheduler.yaml
-│   ├── kubelet-config.yaml
-│   └── kubelet.service
-├── 📁 manifests/                      # Kubernetes YAML manifests
-│   ├── coredns.yaml                   # CoreDNS deployment + ClusterIP service
-│   ├── flannel.yaml                   # Flannel CNI DaemonSet
-│   └── metrics-server.yaml
-├── 📁 tls/                            # Certificate generation configs (cfssl)
-│   ├── ca-config.json                 # CA signing profile
-│   ├── ca-csr.json                    # CA Certificate Signing Request
-│   ├── etcd-csr.json                  # etcd peer/server cert config
-│   └── kube-csr.json                  # Component CSRs (apiserver, kubelet, proxy, admin)
-└── 📁 screenshots/                    # Live cluster verification output
+├── 📁 configs/                         # Systemd unit files & component config templates
+│   ├── containerd.toml                 # containerd runtime config (SystemdCgroup enforcement)
+│   ├── kube-apiserver.service          # API server systemd unit
+│   ├── kube-controller-manager.service # Controller manager systemd unit
+│   ├── kube-proxy-config.yaml          # Kube-proxy node config spec
+│   ├── kube-scheduler.yaml             # Kube-scheduler routing profile
+│   ├── kubelet-config.yaml             # Worker kubelet runtime config
+│   └── kubelet.service                 # Kubelet systemd unit
+├── 📁 manifests/                       # Kubernetes YAML resource manifests
+│   ├── coredns.yaml                    # CoreDNS deployment, ServiceAccount, ClusterIP service
+│   ├── flannel.yaml                    # Flannel CNI DaemonSet + RBAC rules
+│   └── metrics-server.yaml            # Metrics Server deployment spec
+├── 📁 tls/                             # cfssl PKI configuration files
+│   ├── ca-config.json                  # Root CA signing profile and validity windows
+│   ├── ca-csr.json                     # Root Certificate Signing Request parameters
+│   ├── etcd-csr.json                   # etcd peer and server TLS certificate config
+│   └── kube-csr.json                   # Component CSRs (apiserver, kubelet, proxy, admin)
+└── 📁 screenshots/                     # Live cluster verification captures
     ├── cluster-nodes.png
     ├── cluster-pods-all.png
     ├── dns-resolution-test.png
@@ -104,40 +104,41 @@ kthw/
 
 ## 🚀 Deployment Guide
 
-### Step 1 — Environment Setup
+### Step 1 — Infrastructure Provisioning
 
-Provision OpenStack bare-metal instances running **Ubuntu 22.04 LTS**:
+Provision four bare-metal VMs inside your OpenStack tenant running **Ubuntu 22.04 LTS**:
 
 | Host | Role |
 |---|---|
-| `p1-bastion` | Admin access, TLS generation, `kubectl` |
-| `kthw-controller-1` | Single control plane node |
-| `kthw-worker-1` | Worker node |
-| `kthw-worker-2` | Worker node |
+| `p1-bastion` | Admin jump-host — TLS generation, `kubectl`, kubeconfig distribution |
+| `kthw-controller-1` | Single control plane — `etcd`, `kube-apiserver`, `kube-controller-manager`, `kube-scheduler` |
+| `kthw-worker-1` | Worker node — `kubelet`, `kube-proxy`, `containerd` |
+| `kthw-worker-2` | Worker node — `kubelet`, `kube-proxy`, `containerd` |
 
-Install required tooling on the bastion:
+Initialize tooling on `p1-bastion`:
 
 ```bash
-sudo apt-get update && sudo apt-get install -y wget curl vim jq
+sudo apt-get update && sudo apt-get install -y \
+  wget curl vim jq apt-transport-https ca-certificates gnupg lsb-release
 # Also required: cfssl, cfssljson, kubectl
 ```
 
 ---
 
-### Step 2 — TLS Certificate Authority & Certificates
+### Step 2 — Cryptographic PKI & mTLS Certificate Generation
 
-Generate a CA on the bastion and sign certificates for all cluster components:
+Generate the root CA and all downstream component certificates using `cfssl`:
 
-| Certificate | Used by |
+| Certificate | Function |
 |---|---|
-| CA | Root of trust for all components |
-| `etcd` | Peer and server TLS |
-| `kube-apiserver` | Server TLS (SAN includes controller IP) |
-| `kubelet` (per node) | Client auth to API server |
-| `kube-proxy` | Client auth |
-| `admin` | kubeconfig for cluster admin |
+| Root CA (`ca.pem`) | Cryptographic root of trust — signs all internal cluster certs |
+| `etcd.pem` | Secures etcd peer-to-peer and client API transport |
+| `kube-apiserver.pem` | API server TLS — includes SANs for controller IPs and internal ClusterIP |
+| `kubelet-<node>.pem` | Per-node worker identity for node authorizer authentication |
+| `kube-proxy.pem` | Authenticates kube-proxy operations against the control plane |
+| `admin.pem` | Full-cluster admin privileges embedded in `admin.kubeconfig` |
 
-All configs in [`tls/`](./tls/).
+All JSON CSR templates are in [`tls/`](./tls/).
 
 ---
 
@@ -145,15 +146,23 @@ All configs in [`tls/`](./tls/).
 
 **3.1 — etcd**
 
-Install and configure `etcd` for secure key-value storage backing the API server.
+Download, configure, and start `etcd` with encrypted peer communication, a dedicated data directory (`/var/lib/etcd`), and systemd persistence.
 
 **3.2 — Kubernetes Control Plane Binaries**
 
-Download `kube-apiserver`, `kube-controller-manager`, and `kube-scheduler` into `/usr/local/bin/`.
+```bash
+wget -q --show-progress --https-only --timestamping \
+  https://storage.googleapis.com/kubernetes-release/release/v1.28.0/bin/linux/amd64/kube-apiserver \
+  https://storage.googleapis.com/kubernetes-release/release/v1.28.0/bin/linux/amd64/kube-controller-manager \
+  https://storage.googleapis.com/kubernetes-release/release/v1.28.0/bin/linux/amd64/kube-scheduler
+
+chmod +x kube-apiserver kube-controller-manager kube-scheduler
+sudo mv kube-apiserver kube-controller-manager kube-scheduler /usr/local/bin/
+```
 
 **3.3 — Systemd Services**
 
-Place unit files from [`configs/`](./configs/) into `/etc/systemd/system/` and start:
+Deploy unit files from [`configs/`](./configs/) into `/etc/systemd/system/`:
 
 ```bash
 sudo systemctl daemon-reload
@@ -161,17 +170,17 @@ sudo systemctl enable kube-apiserver kube-controller-manager kube-scheduler
 sudo systemctl start kube-apiserver kube-controller-manager kube-scheduler
 ```
 
-**3.4 — RBAC**
+**3.4 — RBAC Authorization**
 
-Apply RBAC rules to authorize `kubelet` API calls from the API server.
+Apply cluster-role bindings to allow the control plane to securely communicate with node runtimes and authorize worker registration.
 
 ---
 
 ### Step 4 — Worker Node Bootstrap (`worker-1` & `worker-2`)
 
-**4.1 — Container Runtime**
+**4.1 — Container Runtime (`containerd` + `runc`)**
 
-Install `containerd` and configure the systemd cgroup driver:
+Install and configure with the `SystemdCgroup` driver to prevent runtime resource deadlocks:
 
 ```toml
 # configs/containerd.toml
@@ -179,13 +188,14 @@ Install `containerd` and configure the systemd cgroup driver:
   SystemdCgroup = true
 ```
 
-**4.2 — Kubernetes Worker Binaries**
+**4.2 — Worker Binaries**
 
-Install `kubelet` and `kube-proxy` into `/usr/local/bin/`.
+Download `kubelet` and `kube-proxy` into `/usr/local/bin/` and apply node-level YAML configs from [`configs/`](./configs/).
 
 **4.3 — Start Services**
 
 ```bash
+sudo systemctl daemon-reload
 sudo systemctl enable containerd kubelet kube-proxy
 sudo systemctl start containerd kubelet kube-proxy
 ```
@@ -194,118 +204,120 @@ sudo systemctl start containerd kubelet kube-proxy
 
 ### Step 5 — Cluster Add-ons
 
-Apply from the bastion:
+Apply all manifests from `p1-bastion`:
 
 ```bash
-kubectl apply -f manifests/flannel.yaml        # Pod overlay network
-kubectl apply -f manifests/coredns.yaml        # Cluster DNS
-kubectl apply -f manifests/metrics-server.yaml # Resource metrics
+kubectl apply -f manifests/flannel.yaml        # Flannel CNI overlay network DaemonSet
+kubectl apply -f manifests/coredns.yaml        # CoreDNS service discovery
+kubectl apply -f manifests/metrics-server.yaml # Resource telemetry scraper
 ```
 
 ---
 
-## ✅ Cluster Verification
+## ✅ Live Cluster Verification
 
-### 🖥️ Node Status
+### 🖥️ 1. Node Topology & Health
 
-Both worker nodes `Ready`, running Kubernetes **v1.28.0** on `containerd` runtime.
+Both worker nodes report `Ready`, running Kubernetes **v1.28.0** on `containerd` runtime.
 
 ![cluster-nodes](screenshots/cluster-nodes.png)
 
 ---
 
-### 📦 All Pods Running
+### 📦 2. System & Application Pod Distribution
 
-nginx replicas, Flannel DaemonSet, CoreDNS, and Metrics Server all `Running` and distributed across both worker nodes.
+All nginx workload replicas, Flannel VXLAN pods, CoreDNS pods, and Metrics Server agents running and distributed across both workers.
 
 ![cluster-pods-all](screenshots/cluster-pods-all.png)
 
 ---
 
-### 📊 Node Resource Metrics (`kubectl top nodes`)
+### 🔍 3. Metrics Server Pod Health
 
-Metrics Server pipeline functional — live CPU and memory consumption from both workers.
-
-![metrics-top-nodes](screenshots/metrics-top-nodes.png)
-
----
-
-### 🔍 Metrics Server Pod
-
-`metrics-server` pod healthy in `kube-system` namespace.
+`metrics-server` pod running cleanly in the `kube-system` namespace.
 
 ![metrics-server-pod](screenshots/metrics-server-pod.png)
 
 ---
 
-### 🌐 CoreDNS — Internal DNS Resolution
+### 📊 4. Live Node Resource Metrics (`kubectl top nodes`)
 
-`nslookup kubernetes.default` resolves correctly to the ClusterIP via `kube-dns.kube-system.svc.cluster.local` from inside a busybox debug pod.
+Metrics Server API aggregation pipeline active — pulling live CPU and memory utilization from both bare-metal workers.
+
+![metrics-top-nodes](screenshots/metrics-top-nodes.png)
+
+---
+
+### 🌐 5. Internal CoreDNS Service Resolution
+
+`nslookup kubernetes.default` from inside a temporary `busybox` debug pod resolves correctly via `kube-dns.kube-system.svc.cluster.local`.
 
 ![dns-resolution-test](screenshots/dns-resolution-test.png)
 
 ---
 
-## 🔧 Troubleshooting & Lessons Learned
+## 🔧 Troubleshooting & Real-World Lessons
 
-> Bare-metal Kubernetes exposes failure domains that automated installers silently paper over. Below are real issues encountered during this deployment.
+> Bare-metal Kubernetes exposes failure domains that automated installers silently paper over. Every issue below was encountered and resolved during this live deployment.
 
 ---
 
-### 🐛 Container Runtime Sandbox Failures
+### 🐛 Issue 1 — Container Runtime Sandbox Failures
 
-**Symptom:** Pods stuck in `ContainerCreating`, `runc` processes hung in uninterruptible sleep.
+**Symptom:** Pods stuck in `ContainerCreating` indefinitely; `runc` processes in uninterruptible sleep (`D` state).
 
-**Root Cause:** Stale process namespaces from a previous failed `containerd` run blocking new sandbox creation.
+**Root Cause:** Stale process namespaces and zombie shim interfaces from a previous unclean `containerd` execution loop blocked new sandbox creation.
 
 **Fix:**
 ```bash
-systemctl stop containerd
-rm -rf /run/containerd/*
-systemctl start containerd
+sudo systemctl stop containerd
+sudo rm -rf /run/containerd/*
+sudo systemctl start containerd
 ```
 
 ---
 
-### 🌐 Cascading CNI / Flannel Failures
+### 🌐 Issue 2 — Cascading CNI / Flannel DaemonSet Crashes
 
-**Symptom:** `kube-flannel` pod in `CrashLoopBackOff`, all pods unable to establish networking.
+**Symptom:** `kube-flannel` pods in continuous `CrashLoopBackOff`, cross-node pod communication completely disabled.
 
-**Root Cause:** Corrupted CNI state directories from a partial previous initialization.
+**Root Cause:** Corrupted CNI state configs and stale bridge bindings in `/run/flannel` from a prior partial initialization.
 
 **Fix:**
 ```bash
-rm -rf /run/flannel /etc/cni/net.d
-systemctl restart kubelet
+sudo rm -rf /run/flannel /etc/cni/net.d
+sudo systemctl restart kubelet
 ```
 
 ---
 
-### 🕐 NTP Time Drift → `401 Unauthorized`
+### 🕐 Issue 3 — NTP Clock Drift → `401 Unauthorized`
 
-**Symptom:** CoreDNS returning `401 Unauthorized` from `kube-apiserver` despite correct RBAC config.
+**Symptom:** CoreDNS pods returning `401 Unauthorized` from `kube-apiserver` despite valid RBAC assignments.
 
-**Root Cause:** Clock skew between the controller and worker nodes caused JWT ServiceAccount token timestamp validation to fail at the API server.
+**Root Cause:** Undetected clock skew between `kthw-controller-1` and worker nodes caused JWT ServiceAccount token timestamp validation to fail at the API server — producing auth errors that mimicked RBAC misconfigurations.
 
 **Fix:**
 ```bash
-systemctl restart systemd-timesyncd
-timedatectl status   # verify sync
+sudo systemctl restart systemd-timesyncd
+timedatectl status   # verify active sync
 ```
 
-> ⚠️ **Lesson:** Always verify NTP sync across **all nodes** before bootstrapping. Clock skew produces misleading auth errors that are easy to misdiagnose as RBAC misconfigurations.
+> ⚠️ **Lesson:** Always verify NTP sync across **all nodes** before bootstrapping. This one is easy to miss and produces deeply misleading errors.
 
 ---
 
-### ⚠️ Metrics APIService — `MissingEndpoints`
+### ⚠️ Issue 4 — Metrics APIService `MissingEndpoints`
 
-**Symptom:** `kubectl describe apiservice v1beta1.metrics.k8s.io` shows `Status: False` / `MissingEndpoints` despite the metrics-server pod running.
+**Symptom:** `kubectl describe apiservice v1beta1.metrics.k8s.io` reports `Status: False` / `MissingEndpoints` despite the metrics-server pod running.
 
-**Root Cause:** The APIService could not reach the metrics-server on the expected `https` port — port name mismatch between the Service and the APIService registration.
+**Root Cause:** Port name mismatch between the `metrics-server` Service definition and the APIService endpoint expectation (`https` port name not matching container spec).
+
+**Fix:** Aligned `targetPort` declarations in [`manifests/metrics-server.yaml`](./manifests/metrics-server.yaml) with the container's listening port.
 
 ![apiservice-available](screenshots/apiservice-available.png)
 
-> `kubectl top nodes` remained functional via cached metrics during investigation.
+> `kubectl top nodes` remained functional via cached metrics during diagnosis.
 
 ---
 
