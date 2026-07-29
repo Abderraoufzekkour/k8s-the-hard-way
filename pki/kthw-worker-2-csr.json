@@ -6,11 +6,11 @@
   },
   "names": [
     {
-      "C": "DZ",
-      "L": "Batna",
+      "C": "US",
+      "L": "Portland",
       "O": "system:nodes",
-      "OU": "ICOSNET",
-      "ST": "Batna"
+      "OU": "Kubernetes The Hard Way",
+      "ST": "Oregon"
     }
   ]
 }
