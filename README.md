@@ -2,10 +2,10 @@
 
 > Manual, installer-free Kubernetes cluster deployment on real OpenStack infrastructure — built to understand every layer of the stack.
 
-![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.x-326CE5?style=flat-square&logo=kubernetes&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.28.0-326CE5?style=flat-square&logo=kubernetes&logoColor=white)
 ![OpenStack](https://img.shields.io/badge/OpenStack-Bare--Metal-ED1944?style=flat-square&logo=openstack&logoColor=white)
 ![Ubuntu](https://img.shields.io/badge/Ubuntu-22.04_LTS-E95420?style=flat-square&logo=ubuntu&logoColor=white)
-![containerd](https://img.shields.io/badge/Runtime-containerd-gray?style=flat-square)
+![containerd](https://img.shields.io/badge/Runtime-containerd_1.7.x-gray?style=flat-square)
 ![Flannel](https://img.shields.io/badge/CNI-Flannel_VXLAN-purple?style=flat-square)
 
 ---
@@ -37,14 +37,14 @@ The goal is full exposure to the internals of a Kubernetes cluster:
                     │  TLS gen, kubectl)│
                     └────────┬─────────┘
                              │
-                    ┌────────▼─────────┐
-                    │ kthw-controller-1│
-                    │                  │
-                    │  • etcd          │
-                    │  • kube-apiserver│
-                    │  • kube-ctrl-mgr │
-                    │  • kube-scheduler│
-                    └────────┬─────────┘
+                    ┌────────▼──────────┐
+                    │ kthw-controller-1 │
+                    │                   │
+                    │  • etcd           │
+                    │  • kube-apiserver │
+                    │  • kube-ctrl-mgr  │
+                    │  • kube-scheduler │
+                    └────────┬──────────┘
                              │
                ┌─────────────┴─────────────┐
                │                           │
@@ -62,7 +62,7 @@ The goal is full exposure to the internals of a Kubernetes cluster:
 | Layer | Component |
 |---|---|
 | Cloud Infrastructure | OpenStack Bare-Metal — Ubuntu 22.04 LTS |
-| Container Runtime | `containerd` + `runc` |
+| Container Runtime | `containerd` 1.7.x + `runc` |
 | Networking (CNI) | Flannel (VXLAN backend) |
 | DNS | CoreDNS |
 | Control Plane | `etcd`, `kube-apiserver`, `kube-controller-manager`, `kube-scheduler` |
@@ -94,7 +94,10 @@ kthw/
 └── 📁 screenshots/                    # Live cluster verification output
     ├── cluster-nodes.png
     ├── cluster-pods-all.png
-    └── dns-resolution-test.png
+    ├── dns-resolution-test.png
+    ├── metrics-server-pod.png
+    ├── metrics-top-nodes.png
+    └── apiservice-available.png
 ```
 
 ---
@@ -203,13 +206,43 @@ kubectl apply -f manifests/metrics-server.yaml # Resource metrics
 
 ## ✅ Cluster Verification
 
-| Check | Command | Expected |
-|---|---|---|
-| Node status | `kubectl get nodes -o wide` | All nodes `Ready` |
-| All pods | `kubectl get pods -A` | All pods `Running` |
-| DNS resolution | `kubectl exec -it <pod> -- nslookup kubernetes` | Resolves to ClusterIP |
+### 🖥️ Node Status
 
-Screenshots of a live, verified cluster are in [`screenshots/`](./screenshots/).
+Both worker nodes `Ready`, running Kubernetes **v1.28.0** on `containerd` runtime.
+
+![cluster-nodes](screenshots/cluster-nodes.png)
+
+---
+
+### 📦 All Pods Running
+
+nginx replicas, Flannel DaemonSet, CoreDNS, and Metrics Server all `Running` and distributed across both worker nodes.
+
+![cluster-pods-all](screenshots/cluster-pods-all.png)
+
+---
+
+### 📊 Node Resource Metrics (`kubectl top nodes`)
+
+Metrics Server pipeline functional — live CPU and memory consumption from both workers.
+
+![metrics-top-nodes](screenshots/metrics-top-nodes.png)
+
+---
+
+### 🔍 Metrics Server Pod
+
+`metrics-server` pod healthy in `kube-system` namespace.
+
+![metrics-server-pod](screenshots/metrics-server-pod.png)
+
+---
+
+### 🌐 CoreDNS — Internal DNS Resolution
+
+`nslookup kubernetes.default` resolves correctly to the ClusterIP via `kube-dns.kube-system.svc.cluster.local` from inside a busybox debug pod.
+
+![dns-resolution-test](screenshots/dns-resolution-test.png)
 
 ---
 
@@ -261,6 +294,18 @@ timedatectl status   # verify sync
 ```
 
 > ⚠️ **Lesson:** Always verify NTP sync across **all nodes** before bootstrapping. Clock skew produces misleading auth errors that are easy to misdiagnose as RBAC misconfigurations.
+
+---
+
+### ⚠️ Metrics APIService — `MissingEndpoints`
+
+**Symptom:** `kubectl describe apiservice v1beta1.metrics.k8s.io` shows `Status: False` / `MissingEndpoints` despite the metrics-server pod running.
+
+**Root Cause:** The APIService could not reach the metrics-server on the expected `https` port — port name mismatch between the Service and the APIService registration.
+
+![apiservice-available](screenshots/apiservice-available.png)
+
+> `kubectl top nodes` remained functional via cached metrics during investigation.
 
 ---
 
